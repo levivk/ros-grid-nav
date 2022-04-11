@@ -5,7 +5,7 @@ from sensor_msgs.msg import LaserScan
 
 def scan_callback(msg):
     ranges = msg.ranges
-    print(ranges[0])
+    print(f'front: {ranges[0]:5.3f} \tleft: {ranges[90]:5.3f} \tright: {ranges[270]:5.3f}')
 
 
 if __name__ == '__main__':
