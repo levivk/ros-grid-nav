@@ -32,12 +32,15 @@ STOP_ROT = pi/10
 
 MAX_VEL = 0.26      #m/s
 MAX_ROT_VEL = 1.82  #rad/s
+VEL_RAMP = 0.1
 
-P_ROTATIONAL = 0.4
+P_ROTATIONAL = 0.5
 
 CLOSE_TOL = 0.05
 
 NEW_GRID_COMP_DIST = 0.2
+
+GRAPH_SPACING = 100
 
 class Dir(Enum):
     POS_X = (1,0)
@@ -67,7 +70,7 @@ class Navigate:
 
     def __init__(self):
 
-        rospy.init_node('navigate', log_level=rospy.DEBUG)
+        rospy.init_node('navigate')
         self._err_sub = rospy.Subscriber('grid_err', GridErr, self.grid_err_callback)
         self._las_sub = rospy.Subscriber('scan', LaserScan, self.scan_callback)
         self._odo_sub = rospy.Subscriber('odom', Odometry, self.odom_callback)
@@ -78,9 +81,12 @@ class Navigate:
         self.front_dist = None
         self.left_dist = None
         self.right_dist = None
+        self.nodes_visited = []
+        self.edges_traveled = []
 
         # Make graph to track grid and objects
         self.graph = nx.grid_2d_graph(GRID_X_DIM,GRID_Y_DIM)
+        self.graph_to_png(self.graph, 'start')
         self.node = START
         self.dir = START_DIR
         self.next_dir = None
@@ -109,6 +115,9 @@ class Navigate:
         
     def run(self):
 
+        nodes_visited = [self.node]
+        edges_traveled = []
+
         self.update_graph(force_update=True)
         next_node = self.path[0]
         self.next_dir = self.node_dir(self.node, next_node)
@@ -125,19 +134,23 @@ class Navigate:
 
         while not rospy.is_shutdown():
 
-            # print(self.path)
-            # rospy.spin()
-
             # If passed into new square
             rospy.logdebug(f'Delta Front error: {self.grid_err.front_err - self.last_grid_err.front_err}')
             if self.last_grid_err.front_err - self.grid_err.front_err > NEW_GRID_COMP_DIST:
 
                 self.node = self.path.pop(0)
+                edges_traveled.append((nodes_visited[-1], self.node))
+                nodes_visited.append(self.node)
+
                 if self.node == GOAL:
                     rospy.loginfo('Goal reached!')
                     self.cmd.linear.x = 0
                     self.cmd.angular.z = 0
                     self._vel_pub.publish(self.cmd)
+
+                    # Final graph
+                    self.graph_to_png(self.graph, 'final', nodes_visited, edges_traveled)
+
                     rospy.spin()
                 next_node = self.path[0]
                 self.next_dir = self.node_dir(self.node, next_node)
@@ -178,13 +191,12 @@ class Navigate:
 
             # Adjust to go straight
             self.cmd.angular.z = self.grid_err.side_err * P_ROTATIONAL
+            # Ramp up to max speed
+            self.cmd.linear.x = min(MAX_VEL, self.cmd.linear.x + VEL_RAMP*MAX_VEL)
             self._vel_pub.publish(self.cmd)
             # print(self.cmd.linear.x)
             rospy.sleep(0.1)
 
-
-            # move forward
-            # repeat
 
     def update_graph(self, force_update=False):
 
@@ -229,7 +241,7 @@ class Navigate:
 
         if removed_node or force_update:
             # Run dijkstra
-            self.path = nx.shortest_path(self.graph, source=START, target=GOAL)
+            self.path = nx.shortest_path(self.graph, source=self.node, target=GOAL)
             rospy.loginfo('Updated path')
             # exclude the first because we are already there
             self.path = self.path[1:]
@@ -249,7 +261,7 @@ class Navigate:
             self._vel_pub.publish(self.cmd)
             rospy.sleep(0.2)
         # continue
-        self.cmd.linear.x = MAX_VEL
+        self.cmd.linear.x = 0.01
         self.cmd.angular.z = 0
         self._vel_pub.publish(self.cmd)
 
@@ -285,7 +297,6 @@ class Navigate:
         self.cmd.linear.x = MAX_VEL
         self._vel_pub.publish(self.cmd)
 
-
     def node_dir(self, n1: tuple, n2: tuple) -> Dir:
         # determine direction from n1 to n2 by subtracting coordinates
         diff = tuple(np.array(n2) - np.array(n1))
@@ -294,6 +305,27 @@ class Navigate:
         except ValueError:
             raise ValueError(f'Error: Tried to find direction between non adjacent nodes {n1} and {n2}!')
 
+    def graph_to_png(self, graph: nx.Graph, name: str, highlight_nodes: list = [], highlight_edges: list = []) -> None:
+        highlight_nodes = [str(s) for s in highlight_nodes]
+        highlight_edges = [(str(e[0]),str(e[1])) for e in highlight_edges]
+        A = nx.nx_agraph.to_agraph(graph)
+        for n in A.iternodes():
+            s = str(n)
+            for c in '() ': s = s.replace(c,'')
+            t = s.split(',')
+            n.attr['pos'] = f'{int(t[0])*GRAPH_SPACING},{int(t[1])*GRAPH_SPACING})'
+
+            if n.name in highlight_nodes:
+                n.attr['color'] = 'blue'
+                n.attr['penwidth'] = 2
+        
+        for e in A.iteredges():
+            if tuple(e) in highlight_edges:
+                e.attr['color'] = 'blue'
+                e.attr['penwidth'] = 2
+
+        print(A.to_string())
+        A.draw(name + '.png', prog='neato', args='-n')
 
 if __name__ == '__main__':
     try:
