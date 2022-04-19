@@ -1,0 +1,3 @@
+float32 front_err
+float32 side_err
+float32 rotation

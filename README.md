@@ -7,4 +7,4 @@
 4. Run `source devel/setup.bash`
 
 # Run
-`roslauch grid-nav print_front_distance`
+`roslauch grid-nav print_distances`

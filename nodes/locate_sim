@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+
+import rospy
+import numpy as np
+from nav_msgs.msg import Odometry
+from grid_nav.msg import GridErr
+from tf.transformations import euler_from_quaternion
+from math import pi
+
+GRID_SIZE = 0.5
+
+class GridLocate:
+
+    def __init__(self):
+
+        rospy.init_node('locate_sim')
+        self._odom_sub = rospy.Subscriber('odom', Odometry, self.odom_callback)
+        self._err_pub = rospy.Publisher('grid_err', GridErr)
+        rospy.sleep(10)
+        rospy.spin()
+
+    def odom_callback(self, msg):
+
+        pos = msg.pose.pose.position
+        quat = msg.pose.pose.orientation
+        eul = euler_from_quaternion([quat.x, quat.y, quat.z, quat.w])
+        rot = eul[2]
+        # 0 is pos x
+        # pi is neg x
+        # pi/2 is pos y
+        # round to nearest dir
+        # z_rot_scale = z_rot / np.pi * 2
+        # heading_dir = np.rint(z_rot_scale)
+        # print(heading_dir)
+
+        # Calculate distance from each edge
+        x_dist = pos.x % GRID_SIZE
+        y_dist = pos.y % GRID_SIZE
+        x_err = x_dist - 0.25
+        y_err = y_dist - 0.25
+        # print(f'{x_err:.3} {y_err:.3}')
+
+        err = GridErr(0,0,0)
+        # pos forward, neg backward
+        # pos right, neg left
+        # pos for ccw, neg for cw
+
+        if -pi/4 < rot <= pi/4:
+            # Positive x
+            err.front_err = x_err
+            err.side_err = -y_err
+            err.rotation = rot
+        elif pi/4 < rot <= 3*pi/4:
+            # Positive y
+            err.front_err = y_err
+            err.side_err = x_err
+            err.rotation = rot - pi/2
+        elif rot > 3*pi/4 or rot <= -3*pi/4:
+            # Negative x
+            err.front_err = -x_err
+            err.side_err = y_err
+            err.rotation = (rot % (2*pi)) - pi
+        elif -3*pi/4 < rot <= -pi/4:
+            # Negative y
+            err.front_err = -y_err
+            err.side_err = -x_err
+            err.rotation = rot + pi/2
+        else:
+            raise RuntimeError("math wrong")
+
+        self._err_pub.publish(err)
+
+if __name__ == '__main__':
+    
+    try:
+        GridLocate()
+    except rospy.ROSInterruptException:
+        pass
