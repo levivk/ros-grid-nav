@@ -4,8 +4,10 @@
   <arg name="y_pos" default="0.25"/>
   <arg name="z_pos" default="0.0"/>
 
+  <env name="GAZEBO_MODEL_PATH" value="$(find grid_nav)/models"/>
+
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
-    <arg name="world_name" value="$(find grid_nav)/worlds/grid1.world"/>
+    <arg name="world_name" value="$(find grid_nav)/worlds/grid1_tape.world"/>
     <arg name="paused" value="false"/>
     <arg name="use_sim_time" value="true"/>
     <arg name="gui" value="true"/>
