@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+
+# Author: Levi Vande Kamp
+# CSCI 5551 final project
+# Spring 2022
+
+# Used as ref: 
+# https://github.com/arjunskumar/Line-Follower--ROS/blob/master/follower_ros.py
+# https://learnopencv.com/find-center-of-blob-centroid-using-opencv-cpp-python/
+
+import rospy
+from grid_nav.msg import GridErr
+from sensor_msgs.msg import Image, CameraInfo
+import cv2
+import cv_bridge
+import numpy as np
+
+
+SHOW_CV_THINGS = True
+
+GRID_SIZE = 0.5
+IMAGE_RATE = 10
+
+STRAIGHT_TOP = 0
+STRAIGHT_BOT = 1
+STRAIGHT_LEFT = 1/4
+STRAIGHT_RIGHT = 3/4
+
+LEFT_TOP = 0
+LEFT_BOT = 1
+LEFT_LEFT = 0
+LEFT_RIGHT = 0.2
+
+RIGHT_TOP = 0
+RIGHT_BOT = 1
+RIGHT_LEFT = 0.8
+RIGHT_RIGHT = 1
+
+class GridLocate:
+
+    def __init__(self):
+
+        rospy.init_node('locate')
+        self.bridge = cv_bridge.CvBridge()
+        self._img_sub = rospy.Subscriber('/camera/rgb/image_raw', Image, self.image_callback)
+        self._err_pub = rospy.Publisher('grid_err', GridErr, queue_size=10)
+
+        self.new_img = False
+        rate = rospy.Rate(IMAGE_RATE)
+        while not rospy.is_shutdown():
+            self.process_image()
+            rate.sleep()
+
+
+    def process_image(self):
+
+        # wait for new image
+        while not self.new_img and not rospy.is_shutdown(): rospy.sleep(0.1)
+
+        # mask image
+        image = self.bridge.imgmsg_to_cv2(self.image_msg, desired_encoding='bgr8')
+        self.new_img = False
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        lower_yellow = np.array([ 10,  10,  10])
+        upper_yellow = np.array([255, 255, 250])
+        mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+        # Get centers
+        s_cx, s_cy = calc_center(mask.copy(), STRAIGHT_LEFT, STRAIGHT_RIGHT, STRAIGHT_TOP, STRAIGHT_BOT, show=SHOW_CV_THINGS)
+        add_circle(image, s_cx, s_cy)
+
+        l_cx, l_cy = calc_center(mask.copy(), LEFT_LEFT, LEFT_RIGHT, LEFT_TOP, LEFT_BOT, show=SHOW_CV_THINGS)
+        add_circle(image, l_cx, l_cy)
+
+        r_cx, r_cy = calc_center(mask.copy(), RIGHT_LEFT, RIGHT_RIGHT, RIGHT_TOP, RIGHT_BOT, show=SHOW_CV_THINGS)
+        add_circle(image, r_cx, r_cy)
+
+        if SHOW_CV_THINGS:
+            cv2.imshow('image', image)
+            cv2.waitKey(1)
+
+        # Calculate errors
+
+
+    def image_callback(self, msg):
+
+        self.image_msg = msg
+        self.new_img = True
+
+
+def calc_center(mask: np.ndarray, l: float, r: float, t: float, b:float, show:bool = False) -> "tuple[float]":
+
+    h,w = mask.shape
+    top = int(h * t)
+    bot = int(h * b)
+    left = int(w * l)
+    right = int(w * r)
+    mask[:top, :] = 0
+    mask[bot:, :] = 0
+    mask[:, :left] = 0
+    mask[:, right:] = 0
+
+    if show:
+        cv2.imshow(f'mask_{l}_{r}_{t}_{b}', mask)
+
+    m = cv2.moments(mask)
+    if not m['m00'] > 0:
+        raise RuntimeError('m00 is zero!!')
+        # return 0,0
+    cx = int(m['m10']/m['m00'])
+    cy = int(m['m01']/m['m00'])
+
+    return cx,cy
+
+def add_circle(image, cx: float, cy: float) -> None:
+    cv2.circle(image, (cx, cy), 5, (255,255,255), -1)
+
+
+if __name__ == '__main__':
+    GridLocate()
