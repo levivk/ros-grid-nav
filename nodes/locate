@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-# Author: Levi Vande Kamp
 # CSCI 5551 final project
 # Spring 2022
 
@@ -8,18 +7,26 @@
 # https://github.com/arjunskumar/Line-Follower--ROS/blob/master/follower_ros.py
 # https://learnopencv.com/find-center-of-blob-centroid-using-opencv-cpp-python/
 
+from zmq import SHARED
 import rospy
 from grid_nav.msg import GridErr
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image
 import cv2
 import cv_bridge
 import numpy as np
 
 
-SHOW_CV_THINGS = True
+SHOW_CV_IMAGE = True
+SHOW_MASKS = False
 
 GRID_SIZE = 0.5
 IMAGE_RATE = 10
+BOT_VERT_CENTER_MULT = 0.856
+
+YELLOW_LOW = [10, 10, 0]
+YELLOW_HI = [255, 255, 255]
+
+LOST_LINE_CORRECTION = 0.2
 
 STRAIGHT_TOP = 0
 STRAIGHT_BOT = 1
@@ -29,12 +36,15 @@ STRAIGHT_RIGHT = 3/4
 LEFT_TOP = 0
 LEFT_BOT = 1
 LEFT_LEFT = 0
-LEFT_RIGHT = 0.2
+LEFT_RIGHT = 0.33
 
 RIGHT_TOP = 0
 RIGHT_BOT = 1
-RIGHT_LEFT = 0.8
+RIGHT_LEFT = 0.66
 RIGHT_RIGHT = 1
+
+class NoLineError(RuntimeError):
+    pass
 
 class GridLocate:
 
@@ -61,25 +71,55 @@ class GridLocate:
         image = self.bridge.imgmsg_to_cv2(self.image_msg, desired_encoding='bgr8')
         self.new_img = False
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        lower_yellow = np.array([ 10,  10,  10])
-        upper_yellow = np.array([255, 255, 250])
+        lower_yellow = np.array(YELLOW_LOW)
+        upper_yellow = np.array(YELLOW_HI)
         mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        h,w = mask.shape
 
         # Get centers
-        s_cx, s_cy = calc_center(mask.copy(), STRAIGHT_LEFT, STRAIGHT_RIGHT, STRAIGHT_TOP, STRAIGHT_BOT, show=SHOW_CV_THINGS)
-        add_circle(image, s_cx, s_cy)
+        try:
+            f_cx, f_cy = calc_center(mask, STRAIGHT_LEFT, STRAIGHT_RIGHT, STRAIGHT_TOP, STRAIGHT_BOT, show=SHOW_MASKS)
+            add_circle(image, f_cx, f_cy)
+        except NoLineError:
+            f_cx = f_cy = float('inf')
 
-        l_cx, l_cy = calc_center(mask.copy(), LEFT_LEFT, LEFT_RIGHT, LEFT_TOP, LEFT_BOT, show=SHOW_CV_THINGS)
-        add_circle(image, l_cx, l_cy)
+        try:
+            l_cx, l_cy = calc_center(mask, LEFT_LEFT, LEFT_RIGHT, LEFT_TOP, LEFT_BOT, show=SHOW_MASKS)
+            add_circle(image, l_cx, l_cy)
+        except NoLineError:
+            l_cx = w * -LOST_LINE_CORRECTION
+            l_cy = h/2
 
-        r_cx, r_cy = calc_center(mask.copy(), RIGHT_LEFT, RIGHT_RIGHT, RIGHT_TOP, RIGHT_BOT, show=SHOW_CV_THINGS)
-        add_circle(image, r_cx, r_cy)
+        try:
+            r_cx, r_cy = calc_center(mask, RIGHT_LEFT, RIGHT_RIGHT, RIGHT_TOP, RIGHT_BOT, show=SHOW_MASKS)
+            add_circle(image, r_cx, r_cy)
+        except NoLineError:
+            r_cx = w * LOST_LINE_CORRECTION
+            r_cy = h/2
 
-        if SHOW_CV_THINGS:
+        if SHOW_CV_IMAGE:
             cv2.imshow('image', image)
             cv2.waitKey(1)
 
-        # Calculate errors
+        # Side error is distance from average of l_cx and r_cx
+        # right is positive
+        lr_mid = (l_cx + r_cx) / 2
+        lr_dif = r_cx - l_cx
+        lr_frame_mid = w/2
+        lr_frame_err = lr_frame_mid - lr_mid
+        # scale to grid
+        scale = GRID_SIZE/lr_dif
+        lr_grid_err = lr_frame_err * scale
+
+        # front error is difference between f_cy and center
+        # forward is positive
+        f_frame_err = BOT_VERT_CENTER_MULT*h - f_cy
+        f_grid_err = (f_frame_err * scale) - GRID_SIZE/2
+
+        err = GridErr()
+        err.side_err = lr_grid_err
+        err.front_err = f_grid_err
+        self._err_pub.publish(err)
 
 
     def image_callback(self, msg):
@@ -89,7 +129,12 @@ class GridLocate:
 
 
 def calc_center(mask: np.ndarray, l: float, r: float, t: float, b:float, show:bool = False) -> "tuple[float]":
+    '''
+    Find the center of the mask white space insided the left, right, top, bottom bounds
+    '''
 
+    # Make copy so we don't change it
+    mask = mask.copy()
     h,w = mask.shape
     top = int(h * t)
     bot = int(h * b)
@@ -105,7 +150,7 @@ def calc_center(mask: np.ndarray, l: float, r: float, t: float, b:float, show:bo
 
     m = cv2.moments(mask)
     if not m['m00'] > 0:
-        raise RuntimeError('m00 is zero!!')
+        raise NoLineError('No line found!')
         # return 0,0
     cx = int(m['m10']/m['m00'])
     cy = int(m['m01']/m['m00'])
@@ -113,8 +158,15 @@ def calc_center(mask: np.ndarray, l: float, r: float, t: float, b:float, show:bo
     return cx,cy
 
 def add_circle(image, cx: float, cy: float) -> None:
+    '''
+    Add a circle with center (cx,cy) to image
+    '''
+
     cv2.circle(image, (cx, cy), 5, (255,255,255), -1)
 
 
 if __name__ == '__main__':
-    GridLocate()
+    try:
+        GridLocate()
+    except rospy.ROSInterruptException:
+        exit()

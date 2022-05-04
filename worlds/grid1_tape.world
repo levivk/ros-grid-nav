@@ -67,6 +67,27 @@
     </include>
 
     <include>
+      <name>ly3</name>
+      <uri>model://yellow_line</uri>
+      <pose frame=''>1.25 1.5 0.0001 0 0 1.570796</pose>
+      <static>true</static>
+    </include>
+
+    <include>
+      <name>ly4</name>
+      <uri>model://yellow_line</uri>
+      <pose frame=''>1.25 2 0.0001 0 0 1.570796</pose>
+      <static>true</static>
+    </include>
+
+    <include>
+      <name>ly5</name>
+      <uri>model://yellow_line</uri>
+      <pose frame=''>1.25 2.5 0.0001 0 0 1.570796</pose>
+      <static>true</static>
+    </include>
+
+    <include>
       <name>lx0</name>
       <uri>model://yellow_line</uri>
       <pose frame=''>0 1.25 0.0001 0 0 0</pose>
@@ -87,6 +108,26 @@
       <static>true</static>
     </include>
 
+    <include>
+      <name>lx3</name>
+      <uri>model://yellow_line</uri>
+      <pose frame=''>1.5 1.25 0.0001 0 0 0</pose>
+      <static>true</static>
+    </include>
+
+    <include>
+      <name>lx4</name>
+      <uri>model://yellow_line</uri>
+      <pose frame=''>2 1.25 0.0001 0 0 0</pose>
+      <static>true</static>
+    </include>
+
+    <include>
+      <name>lx5</name>
+      <uri>model://yellow_line</uri>
+      <pose frame=''>2.5 1.25 0.0001 0 0 0</pose>
+      <static>true</static>
+    </include>
 
 
     <physics type="ode">

@@ -150,8 +150,8 @@ class Navigate:
 
                     # Final graph
                     self.graph_to_png(self.graph, 'final', nodes_visited, edges_traveled)
-
-                    rospy.spin()
+                    exit()
+                    
                 next_node = self.path[0]
                 self.next_dir = self.node_dir(self.node, next_node)
                 rospy.loginfo(f'Entered node {self.node}.')

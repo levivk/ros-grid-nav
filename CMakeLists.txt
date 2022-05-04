@@ -159,6 +159,7 @@ catkin_install_python(PROGRAMS
   nodes/print_distances
   nodes/navigate
   nodes/locate_sim
+  nodes/locate
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
