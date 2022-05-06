@@ -149,7 +149,7 @@
       <always_on>true</always_on>
       <visualize>$(arg camera_visual)</visualize>
       <camera>
-          <horizontal_fov>1.2</horizontal_fov>
+          <horizontal_fov>1.4</horizontal_fov>
           <image>
               <width>640</width>
               <height>480</height>
