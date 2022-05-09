@@ -1,0 +1,4 @@
+<launch>
+    <machine name='tb3' address='tb3' user='ubuntu' password='turtlebot'/>
+    <node machine='tb3' pkg="grid_nav" name="locator" type="locate" output="screen"/>
+</launch>

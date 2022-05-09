@@ -3,20 +3,21 @@
 import networkx as nx
 from enum import Enum, auto
 import numpy as np
-from math import pi, isclose
+from math import pi, isclose, atan, degrees
 
 import rospy
 from grid_nav.msg import GridErr
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Empty
 from tf.transformations import euler_from_quaternion
 
 LOGGING = rospy.DEBUG
 
 GRID_X_DIM = 5
 GRID_Y_DIM = 5
-GRID_SIZE = 0.5
+GRID_SIZE = 0.457
 
 START = (0,0)
 GOAL = (4,4)
@@ -37,9 +38,11 @@ MAX_VEL = 0.12
 MAX_ROT_VEL = 0.6
 VEL_RAMP = 0.05
 
-P_ROTATIONAL = 3
-KP_FOLLOW = 5
+P_ROTATIONAL = 2.5
+KP_FOLLOW = 4
 KD_FOLLOW = 10
+# KP_FOLLOW = 3
+# KD_FOLLOW = 3
 
 CLOSE_TOL = 0.05
 
@@ -76,6 +79,8 @@ class Navigate:
     def __init__(self):
 
         rospy.init_node('navigate', log_level=LOGGING)
+        # Reset odom
+        rospy.Publisher('reset', Empty, queue_size=10).publish(Empty())
         self._err_sub = rospy.Subscriber('grid_err', GridErr, self.grid_err_callback)
         self._las_sub = rospy.Subscriber('scan', LaserScan, self.scan_callback)
         self._odo_sub = rospy.Subscriber('odom', Odometry, self.odom_callback)
@@ -101,6 +106,7 @@ class Navigate:
         self.path = None
 
         self.cmd = Twist()
+        self.rot = None
 
         self.run()
 
@@ -109,9 +115,15 @@ class Navigate:
     
     def scan_callback(self, msg):
         ranges = msg.ranges
+        angle = atan(GRID_SIZE / max(GRID_X_DIM, GRID_Y_DIM))
+        ang_range = int(degrees(angle))
         self.front_dist = ranges[0]
-        self.left_dist = ranges[90]
-        self.right_dist = ranges[270]
+        ldists = ranges[90-ang_range:90+ang_range]
+        rdists = ranges[270-ang_range:270+ang_range]
+        ldists_filt = [(r if r > 0.1 else float('inf')) for r in ldists]
+        rdists_filt = [(r if r > 0.1 else float('inf')) for r in rdists ]
+        self.left_dist = min(ldists_filt)
+        self.right_dist = min(rdists_filt)
 
     def odom_callback(self, msg):
         quat = msg.pose.pose.orientation
@@ -132,13 +144,14 @@ class Navigate:
         self.next_dir = self.node_dir(self.node, next_node)
 
         # wait for subscribes to start receiving
-        while(self.last_grid_err == None or self.front_dist == None):
+        while(self.last_grid_err == None or self.front_dist == None or self.rot == None):
             self.last_grid_err = self.grid_err
             rospy.sleep(0.1)
 
         # go
-        self.cmd.linear.x = MAX_VEL
-        self._vel_pub.publish(self.cmd)
+        # self.cmd.linear.x = MAX_VEL
+        rospy.Timer(rospy.Duration(1/30), self.publish_vel)
+        # self._vel_pub.publish(self.cmd)
         rospy.loginfo('Moving')
 
         while not rospy.is_shutdown():
@@ -151,20 +164,22 @@ class Navigate:
                 edges_traveled.append((nodes_visited[-1], self.node))
                 nodes_visited.append(self.node)
 
+                rospy.loginfo(f'Entered node {self.node}.')
                 if self.node == GOAL:
+                    self.graph_to_png(self.graph, 'final', nodes_visited, edges_traveled)
                     # Keep going to middle
                     while self.grid_err.front_err < TURN_AFTER and not rospy.is_shutdown():
+                        # self._vel_pub.publish(self.cmd)
                         rospy.sleep(0.1)
                     rospy.loginfo('Goal reached!')
-                    self._vel_pub.publish(Twist())
+                    self.cmd = Twist()
+                    # self._vel_pub.publish(Twist())
 
                     # Final graph
-                    self.graph_to_png(self.graph, 'final', nodes_visited, edges_traveled)
                     exit()
                     
                 next_node = self.path[0]
                 self.next_dir = self.node_dir(self.node, next_node)
-                rospy.loginfo(f'Entered node {self.node}.')
 
             self.last_grid_err = self.grid_err
 
@@ -211,8 +226,11 @@ class Navigate:
             self.cmd.angular.z = ang_vel
             # Ramp up to max speed
             self.cmd.linear.x = min(MAX_VEL, self.cmd.linear.x + VEL_RAMP*MAX_VEL)
-            self._vel_pub.publish(self.cmd)
+            # self._vel_pub.publish(self.cmd)
             # print(self.cmd.linear.x)
+
+            rospy.logdebug_throttle(1, f'angle: {self.rot:.3} front_error: {self.grid_err.front_err:.3} side_error: {self.grid_err.side_err:.3}')
+
             rospy.sleep(0.1)
 
 
@@ -230,15 +248,15 @@ class Navigate:
             rospy.loginfo(f'Removed obstacle node {obs_node}')
 
         # Check for obstacles
-        if self.front_dist not in [float('inf'), None]:
-            try:
-                remove_node(self.dir, self.front_dist)
-                removed_node = True
-                rospy.logdebug(f'Obstacle {self.front_dist:0.3}m ahead')
-            except nx.NetworkXError:
-                pass
+        # if self.front_dist not in [float('inf'), None]:
+        #     try:
+        #         remove_node(self.dir, self.front_dist)
+        #         removed_node = True
+        #         rospy.logdebug(f'Obstacle {self.front_dist:0.3}m ahead')
+        #     except nx.NetworkXError:
+        #         pass
 
-        if self.left_dist not in [float('inf'), None]:
+        if self.left_dist not in [float('inf'), None] and self.left_dist > 0.1:
             # Get direction to the left of self.dir
             idx = (list(Dir).index(self.dir) + 1) % 4
             left_dir = list(Dir)[idx]
@@ -249,7 +267,7 @@ class Navigate:
             except nx.NetworkXError:
                 pass
 
-        if self.right_dist not in [float('inf'), None]:
+        if self.right_dist not in [float('inf'), None] and self.right_dist > 0.1:
             # Get direction to the right of self.dir
             idx = (list(Dir).index(self.dir) - 1) % 4
             right_dir = list(Dir)[idx]
@@ -276,18 +294,25 @@ class Navigate:
         # stop
         self.cmd.linear.x = 0
         # rotate
-        while not isclose(angle_sp, self.rot, abs_tol=CLOSE_TOL):
+        rate = rospy.Rate(30)
+        while not isclose(angle_sp, self.rot, abs_tol=CLOSE_TOL) and not rospy.is_shutdown():
             err = angle_sp - self.rot
             # take the short way around
             err = ((err-pi) % (2*pi)) - pi
             ang_vel = np.clip(err * P_ROTATIONAL, -MAX_ROT_VEL, MAX_ROT_VEL)
             self.cmd.angular.z = ang_vel
-            self._vel_pub.publish(self.cmd)
-            rospy.sleep(0.2)
+            # self._vel_pub.publish(self.cmd)
+            rate.sleep()
         # continue
         self.cmd.linear.x = 0.01
         self.cmd.angular.z = 0
-        self._vel_pub.publish(self.cmd)
+        # self._vel_pub.publish(self.cmd)
+
+    def publish_vel(self, event=None):
+        try:
+            self._vel_pub.publish(self.cmd)
+        except rospy.ROSException:
+            pass
 
 
     # def turn(self, turn_times: int) -> None:

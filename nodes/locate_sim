@@ -7,7 +7,7 @@ from grid_nav.msg import GridErr
 from tf.transformations import euler_from_quaternion
 from math import pi
 
-GRID_SIZE = 0.5
+GRID_SIZE = 0.457
 
 class GridLocate:
 
@@ -15,7 +15,7 @@ class GridLocate:
 
         rospy.init_node('locate_sim')
         self._odom_sub = rospy.Subscriber('odom', Odometry, self.odom_callback)
-        self._err_pub = rospy.Publisher('grid_err', GridErr)
+        self._err_pub = rospy.Publisher('grid_err', GridErr, queue_size=10)
         rospy.sleep(10)
         rospy.spin()
 

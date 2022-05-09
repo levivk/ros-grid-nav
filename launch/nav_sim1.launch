@@ -4,6 +4,7 @@
   <arg name="y_pos" default="0.25"/>
   <arg name="z_pos" default="0.0"/>
 
+  <remap from='/camera/rgb/image_raw' to='/camera/image'/>
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="world_name" value="$(find grid_nav)/worlds/grid1.world"/>
     <arg name="paused" value="false"/>
