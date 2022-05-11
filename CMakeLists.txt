@@ -160,6 +160,7 @@ catkin_install_python(PROGRAMS
   nodes/navigate
   nodes/locate_sim
   nodes/locate
+  nodes/record_video
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

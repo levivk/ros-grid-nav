@@ -27,7 +27,7 @@ TURN_AFTER = -0.1
 # offset so if bot is off center closer to object, the object is not determined to be in the grid square one closer
 DISTANCE_OFFSET = 0.1
 # Bounds on front grid error in which to check for objects
-OBJ_CHECK_AFTER = -0.2
+OBJ_CHECK_AFTER = -0.1
 OBJ_CHECK_BEFORE = 0.2
 # The rotation that is close enough to straight at which to stop turning
 STOP_ROT = pi/10
@@ -40,7 +40,7 @@ VEL_RAMP = 0.05
 
 P_ROTATIONAL = 2.5
 KP_FOLLOW = 4
-KD_FOLLOW = 10
+KD_FOLLOW = 15
 # KP_FOLLOW = 3
 # KD_FOLLOW = 3
 
@@ -56,7 +56,7 @@ class Dir(Enum):
     NEG_X = (-1,0)
     NEG_Y = (0,-1)
 
-angle = {
+DIR_TO_ANGLE = {
     Dir.POS_X: 0,
     Dir.POS_Y: pi/2,
     Dir.NEG_X: pi,
@@ -68,6 +68,7 @@ angle = {
 #     RIGHT = auto()
 
 START_DIR = Dir.POS_X
+CHECK_DIR = Dir.POS_Y
 
 class ProgrammingError(RuntimeError):
     # When bad math happens
@@ -79,20 +80,6 @@ class Navigate:
     def __init__(self):
 
         rospy.init_node('navigate', log_level=LOGGING)
-        # Reset odom
-        rospy.Publisher('reset', Empty, queue_size=10).publish(Empty())
-        self._err_sub = rospy.Subscriber('grid_err', GridErr, self.grid_err_callback)
-        self._las_sub = rospy.Subscriber('scan', LaserScan, self.scan_callback)
-        self._odo_sub = rospy.Subscriber('odom', Odometry, self.odom_callback)
-        self._vel_pub = rospy.Publisher('cmd_vel', Twist, queue_size=10)
-
-        self.grid_err = None
-        self.last_grid_err = None
-        self.front_dist = None
-        self.left_dist = None
-        self.right_dist = None
-        self.nodes_visited = []
-        self.edges_traveled = []
 
         # Make graph to track grid and objects
         self.graph = nx.grid_2d_graph(GRID_X_DIM,GRID_Y_DIM)
@@ -100,6 +87,24 @@ class Navigate:
         self.node = START
         self.dir = START_DIR
         self.next_dir = None
+
+        # Reset odom
+        rospy.Publisher('reset', Empty, queue_size=10).publish(Empty())
+        # Publishers and Subscribers
+        self._err_sub = rospy.Subscriber('grid_err', GridErr, self.grid_err_callback)
+        self._las_sub = rospy.Subscriber('scan', LaserScan, self.scan_callback)
+        self._odo_sub = rospy.Subscriber('odom', Odometry, self.odom_callback)
+        self._vel_pub = rospy.Publisher('cmd_vel', Twist, queue_size=10)
+
+        # Other instance variables
+        self.grid_err = None
+        self.last_grid_err = None
+        # self.front_dist = None
+        # self.left_dist = None
+        # self.right_dist = None
+        self.ranges = None
+        self.nodes_visited = []
+        self.edges_traveled = []
 
         rospy.loginfo(f'Starting in node {self.node} facing {self.dir}.')
 
@@ -114,16 +119,7 @@ class Navigate:
         self.grid_err = msg
     
     def scan_callback(self, msg):
-        ranges = msg.ranges
-        angle = atan(GRID_SIZE / max(GRID_X_DIM, GRID_Y_DIM))
-        ang_range = int(degrees(angle))
-        self.front_dist = ranges[0]
-        ldists = ranges[90-ang_range:90+ang_range]
-        rdists = ranges[270-ang_range:270+ang_range]
-        ldists_filt = [(r if r > 0.1 else float('inf')) for r in ldists]
-        rdists_filt = [(r if r > 0.1 else float('inf')) for r in rdists ]
-        self.left_dist = min(ldists_filt)
-        self.right_dist = min(rdists_filt)
+        self.ranges = msg.ranges
 
     def odom_callback(self, msg):
         quat = msg.pose.pose.orientation
@@ -131,6 +127,11 @@ class Navigate:
         self.rot = eul[2]
         
     def run(self):
+
+        # wait for subscribes to start receiving
+        while(self.last_grid_err == None or self.ranges == None or self.rot == None):
+            self.last_grid_err = self.grid_err
+            rospy.sleep(0.1)
 
         nodes_visited = [self.node]
         edges_traveled = []
@@ -143,18 +144,36 @@ class Navigate:
         next_node = self.path[0]
         self.next_dir = self.node_dir(self.node, next_node)
 
-        # wait for subscribes to start receiving
-        while(self.last_grid_err == None or self.front_dist == None or self.rot == None):
-            self.last_grid_err = self.grid_err
-            rospy.sleep(0.1)
+        # publish timer
+        rospy.Timer(rospy.Duration(1/30), self.publish_vel)
+
+        # rotate to posy and update again
+        rospy.loginfo('Checking to the side...')
+        self.turn2(DIR_TO_ANGLE[CHECK_DIR])
+        self.dir = CHECK_DIR
+        try:
+            self.update_graph(nodes_visited)
+        except nx.NetworkXNoPath:
+            rospy.logerr('No path to goal! Exiting...')
+            exit()
 
         # go
         # self.cmd.linear.x = MAX_VEL
-        rospy.Timer(rospy.Duration(1/30), self.publish_vel)
         # self._vel_pub.publish(self.cmd)
         rospy.loginfo('Moving')
 
         while not rospy.is_shutdown():
+
+            # Check for objects
+            if OBJ_CHECK_BEFORE > self.grid_err.front_err > OBJ_CHECK_AFTER:
+                try:
+                    self.update_graph(nodes_visited)
+                except nx.NetworkXNoPath:
+                    self.graph_to_png(self.graph, 'final', nodes_visited, edges_traveled)
+                    rospy.logerr('No path to goal! Check output graph. Exiting...')
+                    exit()
+                next_node = self.path[0]
+                self.next_dir = self.node_dir(self.node, next_node)
 
             # If passed into new square
             # rospy.logdebug(f'Delta Front error: {self.grid_err.front_err - self.last_grid_err.front_err}')
@@ -166,6 +185,7 @@ class Navigate:
 
                 rospy.loginfo(f'Entered node {self.node}.')
                 if self.node == GOAL:
+                    # Final graph
                     self.graph_to_png(self.graph, 'final', nodes_visited, edges_traveled)
                     # Keep going to middle
                     while self.grid_err.front_err < TURN_AFTER and not rospy.is_shutdown():
@@ -175,7 +195,6 @@ class Navigate:
                     self.cmd = Twist()
                     # self._vel_pub.publish(Twist())
 
-                    # Final graph
                     exit()
                     
                 next_node = self.path[0]
@@ -184,37 +203,10 @@ class Navigate:
             self.last_grid_err = self.grid_err
 
 
-            # Check for objects
-            if OBJ_CHECK_BEFORE > self.grid_err.front_err > OBJ_CHECK_AFTER:
-                try:
-                    self.update_graph()
-                except nx.NetworkXNoPath:
-                    self.graph_to_png(self.graph, 'final', nodes_visited, edges_traveled)
-                    rospy.logerr('No path to goal! Check output graph. Exiting...')
-                    exit()
-                next_node = self.path[0]
-                self.next_dir = self.node_dir(self.node, next_node)
-
             # Should turn if near center and next node is different dir
             if self.grid_err.front_err > TURN_AFTER and self.dir != self.next_dir:
                 rospy.loginfo(f'Turning from {self.dir} to {self.next_dir}')
-                self.turn2(angle[self.next_dir])
-                # idx_1 = list(Dir).index(self.dir)
-                # idx_2 = list(Dir).index(self.next_dir)
-
-                # idx_change = (idx_2 - idx_1) % 4
-
-                # if idx_change == 1:
-                #     # turn left once
-                #     self.turn(1)
-                # elif idx_change == 2:
-                #     # turn left twice
-                #     self.turn(2)
-                # elif idx_change == 3:
-                #     # turn right once
-                #     self.turn(-1)
-                # else:
-                #     raise ProgrammingError('Error: Unexpected difference in direction indicies: {idx_change}. Check math.')
+                self.turn2(DIR_TO_ANGLE[self.next_dir])
                 self.dir = self.next_dir
                 self.last_grid_err = self.grid_err
 
@@ -234,7 +226,7 @@ class Navigate:
             rospy.sleep(0.1)
 
 
-    def update_graph(self, force_update=False):
+    def update_graph(self, nodes_visited=[], force_update=False):
 
         removed_node = False
 
@@ -244,6 +236,9 @@ class Navigate:
             grid_dist_int = round(grid_dist)
             obs_node = np.array(self.node) + np.array(direction.value) * grid_dist_int
             obs_node = tuple(obs_node)
+            if obs_node in nodes_visited:
+                # Must be a false positive
+                raise nx.NetworkXError
             self.graph.remove_node(obs_node)
             rospy.loginfo(f'Removed obstacle node {obs_node}')
 
@@ -256,25 +251,46 @@ class Navigate:
         #     except nx.NetworkXError:
         #         pass
 
-        if self.left_dist not in [float('inf'), None] and self.left_dist > 0.1:
+        # angle from center to corner of farthest square to get range of angles to check
+        angle = atan(GRID_SIZE / max(GRID_X_DIM, GRID_Y_DIM))
+        ang_range = int(degrees(angle))
+        # self.front_dist = ranges[0]
+        # Calculate left/right angle with respect to odom
+        set_angle = DIR_TO_ANGLE[self.dir]
+        real_angle = self.rot
+        left_angle = int(90 + degrees(set_angle - real_angle))
+        right_angle = int(270 + degrees(set_angle - real_angle))
+
+        # Make a 3 copy so lower and upper angles don't go out of bounds
+        three_ranges = self.ranges * 3
+        ln = len(self.ranges)
+        ldists = three_ranges[ln + (left_angle - ang_range):ln + (left_angle + ang_range)]
+        rdists = three_ranges[ln + (right_angle - ang_range):ln + (right_angle + ang_range)]
+        ldists_filt = [(r if r > 0.1 else float('inf')) for r in ldists]
+        rdists_filt = [(r if r > 0.1 else float('inf')) for r in rdists ]
+        left_dist = min(ldists_filt)
+        right_dist = min(rdists_filt)
+
+
+        if left_dist not in [float('inf'), None] and left_dist > 0.1:
             # Get direction to the left of self.dir
             idx = (list(Dir).index(self.dir) + 1) % 4
             left_dir = list(Dir)[idx]
             try:
-                remove_node(left_dir, self.left_dist)
+                remove_node(left_dir, left_dist)
                 removed_node = True
-                rospy.logdebug(f'Obstacle {self.left_dist:0.3}m to the left')
+                rospy.logdebug(f'Obstacle {left_dist:0.3}m to the left')
             except nx.NetworkXError:
                 pass
 
-        if self.right_dist not in [float('inf'), None] and self.right_dist > 0.1:
+        if right_dist not in [float('inf'), None] and right_dist > 0.1:
             # Get direction to the right of self.dir
             idx = (list(Dir).index(self.dir) - 1) % 4
             right_dir = list(Dir)[idx]
             try:
-                remove_node(right_dir, self.right_dist)
+                remove_node(right_dir, right_dist)
                 removed_node = True
-                rospy.logdebug(f'Obstacle {self.right_dist:0.3}m to the right')
+                rospy.logdebug(f'Obstacle {right_dist:0.3}m to the right')
             except nx.NetworkXError:
                 pass
 
@@ -314,37 +330,6 @@ class Navigate:
         except rospy.ROSException:
             pass
 
-
-    # def turn(self, turn_times: int) -> None:
-    #     # turn_times is negative for ccw and pos for cw
-
-    #     dir_ = np.sign(turn_times)
-    #     turns = abs(turn_times)
-        
-    #     # Start turning
-    #     self.cmd.linear.x = 0
-    #     self.cmd.angular.z = MAX_ROT_VEL * dir_
-    #     self._vel_pub.publish(self.cmd)
-        
-    #     for _ in range(turns):
-
-    #         print(f'{self.grid_err.rotation} \t rotating')
-    #         # loop until it crosses the pi/4 point
-    #         while(not (self.grid_err.rotation * dir_ < 0 and self.last_grid_err.rotation * dir_ > 0)):
-    #             self._vel_pub.publish(self.cmd)
-    #             rospy.sleep(0.01)
-    #         print(f'{self.grid_err.rotation} \t crossed')
-
-    #         # loop until close to straight
-    #         while(self.grid_err.rotation * dir_ < STOP_ROT * dir_):
-    #             self._vel_pub.publish(self.cmd)
-    #             rospy.sleep(0.01)
-    #         print('straight')
-
-    #     # Stop turning and go forward
-    #     self.cmd.angular.z = 0
-    #     self.cmd.linear.x = MAX_VEL
-    #     self._vel_pub.publish(self.cmd)
 
     def node_dir(self, n1: tuple, n2: tuple) -> Dir:
         # determine direction from n1 to n2 by subtracting coordinates

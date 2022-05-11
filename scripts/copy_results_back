@@ -1,0 +1,3 @@
+#!/bin/bash
+rsync -avz ubuntu@tb3:/home/ubuntu/*.png /home/levi/dev/catkin_ws/src/grid_nav/output
+# rsync -avz ubuntu@tb3:/home/ubuntu/*.mkv /home/levi/dev/catkin_ws/src/grid_nav/output

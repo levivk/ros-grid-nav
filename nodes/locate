@@ -20,11 +20,14 @@ SHOW_MASKS = False
 PUB_IMAGES = True
 
 GRID_SIZE = 0.5
-IMAGE_RATE = 10
+IMAGE_RATE = 12
 SCALE = 1/475
 BOT_VERT_CENTER_MULT = 0.42
 
 MIN_NONMASK = 50
+
+# # dependant on pi processing power. Maybe should use fixed rate.
+# FRAME_RATE = 7.6
 
 # map from gimp to opencv
 def hsv_map(hsv):
@@ -74,12 +77,21 @@ class GridLocate:
             self._fmsk_pub = None
             self._image_pub = None
 
+        # fourcc = cv2.VideoWriter_fourcc(*'X264')
+        # self.video_writer = cv2.VideoWriter('cv_video.mkv', fourcc, IMAGE_RATE, (640,480))
+        # self.nav_pics = []
+
         self.new_img = False
         rate = rospy.Rate(IMAGE_RATE)
         rospy.loginfo('Locate starting...')
         while not rospy.is_shutdown():
             self.process_image()
             rate.sleep()
+
+        # for im in self.nav_pics:
+        #     self.video_writer.write(im)
+        # self.video_writer.release()
+        cv2.destroyAllWindows()
 
 
     def process_image(self):
@@ -138,6 +150,9 @@ class GridLocate:
         self._err_pub.publish(err)
 
         cv2.putText(image, f'x_err: {lr_grid_err:.3} y_err: {f_grid_err:.3}', (5,h-25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255),2)
+
+        # self.video_writer.write(image)
+        # self.nav_pics.append(image)
 
         if PUB_IMAGES:
             img_msg = bridge.cv2_to_imgmsg(image, encoding='bgr8')

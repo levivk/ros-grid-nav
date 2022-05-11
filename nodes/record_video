@@ -1,0 +1,30 @@
+#!/bin/env python3
+
+# Because I couldn't get image_view video_recorder to work
+
+import rospy
+from sensor_msgs.msg import Image
+import cv_bridge
+import cv2
+import os
+
+IMAGE_RATE = 12
+
+this_file_path = os.path.dirname(os.path.abspath(__file__))
+
+bridge = cv_bridge.CvBridge()
+fourcc = cv2.VideoWriter_fourcc(*'X264')
+path = os.path.join(this_file_path, '../output/cv_video.mkv')
+video_writer = cv2.VideoWriter(path, fourcc, IMAGE_RATE, (640,480))
+
+def image_callback(msg):
+    image = bridge.imgmsg_to_cv2(msg)
+    video_writer.write(image)
+
+
+if __name__ == '__main__':
+    rospy.init_node('video_recorder')
+    sub = rospy.Subscriber('/cv_image', Image, image_callback)
+    rospy.spin()
+    video_writer.release()
+    

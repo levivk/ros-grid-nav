@@ -1,0 +1,2 @@
+#!/bin/bash
+rsync -avz --exclude '.vscode' /home/levi/dev/catkin_ws/src/grid_nav ubuntu@tb3:/home/ubuntu/catkin_ws/src/
